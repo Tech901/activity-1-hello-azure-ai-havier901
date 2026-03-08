@@ -52,7 +52,7 @@ def _get_openai_client():
             api_key=os.environ["AZURE_OPENAI_API_KEY"],
             api_version="2024-10-21",
         )
-        return _openai_client
+    return _openai_client
     # raise NotImplementedError("Configure the Azure OpenAI client")
    
 
@@ -70,7 +70,7 @@ def _get_content_safety_client():
             endpoint=os.environ["AZURE_CONTENT_SAFETY_ENDPOINT"],
             credential=AzureKeyCredential(os.environ["AZURE_CONTENT_SAFETY_KEY"]),
         )
-        return _content_safety_client
+    return _content_safety_client
     # raise NotImplementedError("Configure the Content Safety client")
     
 
@@ -88,7 +88,7 @@ def _get_language_client():
             endpoint=os.environ["AZURE_AI_LANGUAGE_ENDPOINT"],
             credential=AzureKeyCredential(os.environ["AZURE_AI_LANGUAGE_KEY"]),
         )
-        return _language_client
+    return _language_client
     # raise NotImplementedError("Configure the AI Language client")
     
 
@@ -105,13 +105,22 @@ def classify_311_request(request_text: str) -> dict:
     Returns:
         dict with keys: category, confidence, reasoning
     """
-    # TODO: Step 1.1 - Get the OpenAI client
-    client = _openai_client
-    # TODO: Step 1.2 - Call client.chat.completions.create() with:
-    #   model=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
-    #   A system message that classifies into: Pothole, Noise Complaint,
-    #   Trash/Litter, Street Light, Water/Sewer, Other
-    #   response_format={"type": "json_object"}, temperature=0
+   # ---------------------------------------------------------------------------
+# Step 1 - Classify a 311 request with Azure OpenAI
+# ---------------------------------------------------------------------------
+def classify_311_request(request_text: str) -> dict:
+    """Send a Memphis 311 service request to Azure OpenAI for classification.
+
+    Args:
+        request_text: The citizen's complaint text.
+
+    Returns:
+        dict with keys: category, confidence, reasoning
+    """
+    # Get the OpenAI client
+    client = _get_openai_client()
+    
+    # Call client.chat.completions.create()
     response = client.chat.completions.create(
         model=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o"),
         messages=[
@@ -122,19 +131,20 @@ def classify_311_request(request_text: str) -> dict:
                     "requests into one of the following categories: Pothole, Noise Complaint, "
                     "Trash/Litter, Street Light, Water/Sewer, Other. Respond with a JSON object "
                     "with keys: category (one of the categories), confidence (0-1), and reasoning "
-                    "explaining why you chose that category."
+                    "(explaining why you chose that category)."
                 )
-            }, #<-- COMMA
+            },
             {"role": "user", "content": request_text},
         ],
         response_format={"type": "json_object"},
         temperature=0,
     )
-    # TODO: Step 1.3 - Parse the JSON response with json.loads()
+    
+    # Parse the JSON response
     result = json.loads(response.choices[0].message.content)
     print(result["category"], result["confidence"], result["reasoning"])
-    #raise NotImplementedError("Implement classify_311_request in Step 1")
-
+    #if result is not None
+    return result
 
 # ---------------------------------------------------------------------------
 # TODO: Step 2 - Check content safety
@@ -149,29 +159,34 @@ def check_content_safety(text: str) -> dict:
         dict with keys: safe (bool), categories (dict of category: severity)
     """
     # TODO: Step 2.1 - Get the Content Safety client
+    client = _get_content_safety_client()
 
     # TODO: Step 2.2 - Call client.analyze_text() with AnalyzeTextOptions
     from azure.ai.contentsafety.models import AnalyzeTextOptions
 
-    result = _content_safety_client.analyze_text(AnalyzeTextOptions(text=text))
+    response = client.analyze_text(AnalyzeTextOptions(text=text))
 
     # TODO: Step 2.3 - Return safety results
     ############DOUBLE CHECK LOGIC###
-    value_count = 0
-    for category in result.categories_analysis:
-        ### did I jimmy-rig this?###
+    categories_result = {}
+    total_severity = 0
+
+    for category in response.categories_analysis:
         
-        for value in category.values:
-            value_count += value.severity
-        if value_count == 0:
-            return {"safe": True, "categories": {"Hate": 0, "SelfHarm": 0, "Sexual": 0, "Violence": 0}}
-        else: return {
-                "safe": result.safe,
-                "categories": {
-                    category.category: category.severity
-                },
-            }
-    # raise NotImplementedError("Implement check_content_safety in Step 2")
+        for category in response.categories_analysis:
+            category_name = category.category
+            severity = category.severity or 0
+            categories_result[category_name] = severity
+            total_severity += severity
+
+        # Determine if content is safe (no harmful content detected)
+        is_safe = total_severity == 0
+
+        return {
+            "safe": is_safe,
+            "categories": categories_result,
+        }
+    
 
 
 # ---------------------------------------------------------------------------
@@ -187,14 +202,17 @@ def extract_key_phrases(text: str) -> list[str]:
         List of key phrase strings.
     """
     # TODO: Step 3.1 - Get the Language client
-    ##DONE 
+    client = _get_language_client()
+
     # TODO: Step 3.2 - Call client.extract_key_phrases([text])
-    response = _language_client.extract_key_phrases([text])
+    response = client.extract_key_phrases(documents=[text])
     
     # TODO: Step 3.3 - Return the list of key phrases
-    if response[0].is_error == False:
-        return response[0].key_phrases
-    #raise NotImplementedError("Implement extract_key_phrases in Step 3")
+    if not response or response[0].is_error:
+        return []
+    
+    return response[0].key_phrases
+    
 
  
 def main():
